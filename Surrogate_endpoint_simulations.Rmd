@@ -1,0 +1,37 @@
+---
+title: "McNemar Adaptive Design — Surrogate endpoint simulations"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.path = "figs/")
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+source("Conditional-Power-McNemar.R")
+
+```
+
+```{r echo=FALSE}
+# define surrogate distribution
+q_true <- c(0.444, 0.176, 0.026, 0.354)
+
+# define a family of plausible T matrices
+T1 <- diag(4)  # no transition
+T2 <- matrix(c(
+  0.8,0,  0,  0,
+  0.2,0.8,0,  0,
+  0,  0.2,0.7,0,
+  0,  0,  0.3,1
+), byrow=TRUE, nrow=4)
+
+res1 <- simulate_trial(q_true=q_true, T_true=T1, B=10)
+res2 <- simulate_trial(q_true=q_true, T_true=T2, B=10)
+
+mean(res1$reject)
+mean(res2$reject)
+
+```
+

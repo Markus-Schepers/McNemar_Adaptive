@@ -1,0 +1,56 @@
+---
+title: "McNemar Adaptive Design — Conditional Power Plots"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.path = "figs/")
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+source("Conditional-Power-McNemar.R")
+
+```
+
+```{r heatmaps, echo=FALSE}
+p_grid   <- seq(0.5, 0.9, length.out = 41)
+nd1_grid <- 0:50
+
+df_cp <- expand.grid(p = p_grid, nd1 = nd1_grid) %>%
+rowwise() %>%
+mutate(cp = conditional_power(p = p, nd1 = nd1, nsecond = 30)) %>%
+ungroup()
+
+p1 <- ggplot(df_cp, aes(x = p, y = nd1, fill = cp)) +
+geom_tile() +
+scale_fill_viridis_c() +
+labs(title = "Conditional Power (fixed second stage sample size = 30)",
+x = "p*", y = "number of discordant pairs observed in first stage") +
+theme_minimal()
+
+
+
+
+target_power <- 0.8
+
+df_n2 <- expand.grid(p = p_grid, nd1 = nd1_grid) %>%
+rowwise() %>%
+mutate(n2min = min_nsecond(p = p, nd1 = nd1,
+target_power = target_power,
+psi = 0.2, alpha = 0.05,
+nsecond_max = 70)) %>%
+ungroup()
+
+p2 <- ggplot(df_n2, aes(x = p, y = nd1, fill = n2min)) +
+geom_tile() +
+scale_fill_viridis_c(option = "C") +
+labs(title = paste0("Minimal second stage sample size \nfor Conditional Power ≥ ", target_power),
+x = "p*", y = "number of discordant pairs observed in first stage") +
+theme_minimal()
+
+p1
+p2
+```
+
