@@ -20,14 +20,14 @@ nd1_grid <- 0:50
 
 df_cp <- expand.grid(p = p_grid, nd1 = nd1_grid) %>%
 rowwise() %>%
-mutate(cp = conditional_power(p = p, nd1 = nd1, nsecond = 30)) %>%
+mutate(cp = conditional_power(p_star = p, psi=0.2, nd1 = nd1, nsecond = 38)) %>%
 ungroup()
 
 p1 <- ggplot(df_cp, aes(x = p, y = nd1, fill = cp)) +
 geom_tile() +
 scale_fill_viridis_c() +
-labs(title = "Conditional Power (fixed second stage sample size = 30)",
-x = "p*", y = "number of discordant pairs observed in first stage") +
+labs(title = "Conditional Power (fixed second stage sample size = 38)",
+x = expression(p["*"]), y = expression(n["d"]^"(1)")) +
 theme_minimal()
 
 
@@ -37,7 +37,7 @@ target_power <- 0.8
 
 df_n2 <- expand.grid(p = p_grid, nd1 = nd1_grid) %>%
 rowwise() %>%
-mutate(n2min = min_nsecond(p = p, nd1 = nd1,
+mutate(n2min = min_nsecond(p_star = p, nd1 = nd1,
 target_power = target_power,
 psi = 0.2, alpha = 0.05,
 nsecond_max = 70)) %>%
@@ -47,7 +47,7 @@ p2 <- ggplot(df_n2, aes(x = p, y = nd1, fill = n2min)) +
 geom_tile() +
 scale_fill_viridis_c(option = "C") +
 labs(title = paste0("Minimal second stage sample size \nfor Conditional Power ≥ ", target_power),
-x = "p*", y = "number of discordant pairs observed in first stage") +
+x = expression(p["*"]), y = expression(n["d"]^"(1)")) +
 theme_minimal()
 
 p1
