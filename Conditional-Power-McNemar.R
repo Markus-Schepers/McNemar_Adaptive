@@ -1,6 +1,4 @@
 
-library(dplyr)
-
 lower <- function(n,alpha=0.05){
   if(pbeta(0.5,n,1) > alpha/2) return(NA)
   for(k in 1:n){
@@ -23,28 +21,28 @@ upper <- function(n,alpha=0.05){
 
 
 # exact power conditioned on a certain number of discordant pairs nd
-exact_power <- function(p,nd,alpha=0.05){
+exact_power <- function(p_star,nd,alpha=0.05){
   if(nd==0) return(0)
   k1 <- lower(nd,alpha)
   k2 <- upper(nd,alpha)
   if(is.na(k1)) return(0)
   if(is.na(k2)) return(0)
-  return(pbinom(k1,nd,p)+1-pbinom(k2-1,nd,p))
+  return(pbinom(k1,nd,p_star)+1-pbinom(k2-1,nd,p_star))
 }
 
 # exact power conditioned on number of discordant pairs nd1 in first stage, 
 # using size of first stage and size of second stage
 # using the probability for a discordant pair
-conditional_power <- function(p,nd1,nsecond=38,psi=0.2,alpha=0.05){
+conditional_power <- function(p_star,psi, nd1,nsecond=38,alpha=0.05){
   nd2_vals <- 0:nsecond
-  sum(vapply(nd2_vals,function(nd2){ return(exact_power(p,(nd1+nd2),alpha) * dbinom(nd2,nsecond,psi)) },numeric(1))) 
+  sum(vapply(nd2_vals,function(nd2){ return(exact_power(p_star,(nd1+nd2),alpha) * dbinom(nd2,nsecond,psi)) },numeric(1))) 
 }
 
 
-min_nsecond <- function(p, nd1, target_power = 0.8, psi = 0.2,
+min_nsecond <- function(p_star, psi, nd1, target_power = 0.8, 
                         alpha = 0.05, nsecond_max = 200) {
   # 1. Check feasibility at maximum nsecond
-  cp_max <- conditional_power(p = p, nd1 = nd1,
+  cp_max <- conditional_power(p_star = p_star, nd1 = nd1,
                               nsecond = nsecond_max,
                               psi = psi, alpha = alpha)
   
@@ -54,7 +52,7 @@ min_nsecond <- function(p, nd1, target_power = 0.8, psi = 0.2,
   
   # 2. Search for smallest n2 achieving the target
   for(n2 in 0:nsecond_max){
-    cp <- conditional_power(p = p, nd1 = nd1,
+    cp <- conditional_power(p_star = p_star, nd1 = nd1,
                             nsecond = n2,
                             psi = psi, alpha = alpha)
     
@@ -68,141 +66,82 @@ min_nsecond <- function(p, nd1, target_power = 0.8, psi = 0.2,
 }
 
 
-estimate_transition_matrix <- function(surr, final, pseudo = 0.5) {
-  # surr  = factor/1..4 category for surrogate endpoint at interim
-  # final = factor/1..4 category for final endpoint (same patients)
-  # pseudo = pseudocount to stabilize very small samples (Laplace smoothing)
+
+
+
+estimate_theta <- function(n_disc_surr,
+                           n_disc_final,
+                           n_disc_surr_final,
+                           n_total,
+                           pseudo = 0.5) {
   
-  if(length(surr) != length(final)) stop("Lengths differ")
+  # 2x2 table
+  # rows: surrogate (1=disc, 0=conc)
+  # cols: final     (1=disc, 0=conc)
   
-  # Create full 4x4 table
-  tab <- table(factor(final, levels=1:4), factor(surr, levels=1:4))
-  T_hat <- matrix(0, nrow=4, ncol=4)
+  n11 <- n_disc_surr_final
+  n10 <- n_disc_surr - n_disc_surr_final
+  n01 <- n_disc_final - n_disc_surr_final
+  n00 <- n_total - n_disc_surr - n_disc_final + n_disc_surr_final
   
-  for(j in 1:4) {
-    # allowed i are i >= j (lower triangular)
-    allowed_i <- j:4
-    sub_counts <- as.numeric(tab[allowed_i, j])
-    
-    # smoothing to avoid 0/0 divisions
-    sub_probs <- (sub_counts + pseudo) / sum(sub_counts + pseudo)
-    
-    T_hat[allowed_i, j] <- sub_probs
-  }
+  theta1 <- (n11 + pseudo) / (n11 + n10 + 2*pseudo)
+  theta0 <- (n01 + pseudo) / (n01 + n00 + 2*pseudo)
   
-  return(T_hat)
+  return(c(theta1 = theta1, theta0 = theta0))
+}
+predict_nd1_from_surrogate <- function(nd1_surr, n1, theta1, theta0) {
+  round(theta1 * nd1_surr + theta0 * (n1 - nd1_surr))
 }
 
 
-conditional_power_surrogate <- function(q_vec, Tmat, nd1_surr,
-                                        nsecond = 38,
-                                        alpha = 0.05) {
+# when using the surrogate endpoint, re-estimate the sample size by estimating the number of discordant pairs in the final endpoint at interim analysis, and use the conditional power for the final endpoint
+# p_star is the effect size (once the fraction of discordant pairs psi is fixed)
+predicted_power_surrogate <- function(p_star,psi,
+                                      nd1_surr,
+                                      n1,
+                                      theta1,
+                                      theta0,
+                                      nsecond,
+                                      alpha) {
   
-  # obtain final endpoint probabilities
-  p_vec <- as.numeric(Tmat %*% q_vec)
+  nd1 <- predict_nd1_from_surrogate(nd1_surr, n1, theta1, theta0)
   
-  # discordant probability under final endpoint
-  psi_p <- p_vec[2] + p_vec[3]
-  p_star <- p_vec[2] / psi_p 
-  
-  cp <- conditional_power(p = p_star,
-                          nd1 = nd1_surr, # recompute?
-                          nsecond = nsecond,
-                          psi = psi_p,
-                          alpha = alpha)
-  
-  return(cp)
+  return(conditional_power(
+    p_star = p_star, psi = psi,
+    nd1 = nd1,
+    nsecond = nsecond,
+    alpha = alpha
+  ))
 }
 
-min_nsecond_surrogate <- function(q_vec, Tmat, nd1_surr,
-                                  target_power = 0.8,
-                                  alpha = 0.05,
-                                  nsecond_max = 200) {
-  
-  p_vec <- as.numeric(Tmat %*% q_vec)
-  psi_p <- p_vec[2] + p_vec[3]
-  
+
+min_nsecond_surrogate <- function(
+    p_star, psi,
+    nd1_surr,
+    n1,
+    theta1,
+    theta0,
+    target_power = 0.8,
+    alpha = 0.05,
+    nsecond_max = 200) {
   # feasibility check
-  cp_max <- conditional_power_surrogate(q_vec, Tmat,
-                                        nd1_surr,
-                                        nsecond = nsecond_max,
-                                        alpha = alpha)
-  if(is.na(cp_max) || cp_max < target_power) return(NA)
+  pp_max <- predicted_power_surrogate(p_star,nd1_surr,n1,theta1 = theta1,theta0 = theta0, psi = psi,nsecond=nsecond_max,alpha = alpha)
+  if(is.na(pp_max) || pp_max < target_power) return(NA)
   
   # search minimal n2
   for(n2 in 0:nsecond_max) {
-    cp <- conditional_power_surrogate(q_vec, Tmat,
-                                      nd1_surr,
-                                      nsecond = n2,
-                                      alpha = alpha)
-    if(!is.na(cp) && cp >= target_power) return(n2)
+    pp <- predicted_power_surrogate(
+      p_star = p_star,
+      nd1_surr = nd1_surr,
+      n1 = n1,
+      theta1 = theta1,theta0 = theta0,psi=psi,
+      nsecond=n2,
+      alpha = alpha)
+    if(!is.na(pp) && pp >= target_power) return(n2)
   }
   
   return(NA)
 }
-
-
-simulate_trial <- function(n1 = 38,                # stage-1 sample size
-                           n_link = 25,            # patients with both surr+final observed at interim
-                           q_true,                 # true surrogate cell probs
-                           T_true,                 # true transition
-                           alpha = 0.05,
-                           target_power = 0.8,
-                           B = 1000) {
-  
-  results <- data.frame(
-    reject = logical(B),
-    n2     = integer(B)
-  )
-  
-  for(b in 1:B) {
-    
-    ## ---- Stage 1 surrogate data ----
-    surr_stage1 <- sample(1:4, size = n1, replace = TRUE, prob = q_true)
-    nd1_surr <- sum(surr_stage1 == 2 | surr_stage1 == 3)
-    
-    ## ---- Sub-sample for transition estimation ----
-    surr_link <- sample(surr_stage1, size = n_link, replace = FALSE)
-    # simulate corresponding final endpoint via true T
-    final_link <- sapply(surr_link, function(j) {
-      sample(1:4, size = 1, prob = T_true[, j])
-    })
-    
-    ## ---- Estimate T_hat ----
-    T_hat <- estimate_transition_matrix(surr = surr_link,
-                                        final = final_link,
-                                        pseudo = 0.5)
-    
-    ## ---- Compute stage-2 sample size ----
-    n2 <- min_nsecond_surrogate(q_vec = q_true,
-                                Tmat = T_hat,
-                                nd1_surr = nd1_surr,
-                                target_power = target_power,
-                                alpha = alpha)
-    results$n2[b] <- n2
-    
-    ## ---- Generate remaining surrogate & final data ----
-    if(is.na(n2)) {
-      results$reject[b] <- FALSE
-      next
-    }
-    
-    # final sample consists of n1+n2 patients; simulate final endpoint directly
-    # using true p = T_true q_true
-    p_true <- as.numeric(T_true %*% q_true)
-    
-    final_all <- sample(1:4, size = n1 + n2, replace = TRUE, prob = p_true)
-    n12 <- sum(final_all == 2)
-    n21 <- sum(final_all == 3)
-    test_result <- binom.test(n12, n12 + n21, p = 0.5, alternative = "two.sided")$p.value
-    results$reject[b] <- (test_result <= alpha)
-    
-  }
-  
-  return(results)
-}
-
-
 
 
 
