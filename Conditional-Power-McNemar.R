@@ -68,81 +68,121 @@ min_nsecond <- function(p_star, psi, nd1, target_power = 0.8,
 
 
 
-
-estimate_theta <- function(n_disc_surr,
-                           n_disc_final,
-                           n_disc_surr_final,
-                           n_total,
+# 2x2 table
+# rows: surrogate (1=disc, 0=conc)
+# cols: primary     (1=disc, 0=conc)
+estimate_theta <- function(n11,
+                           n10,
+                           n01,
+                           n00,
                            pseudo = 0.5) {
-  
-  # 2x2 table
-  # rows: surrogate (1=disc, 0=conc)
-  # cols: final     (1=disc, 0=conc)
-  
-  n11 <- n_disc_surr_final
-  n10 <- n_disc_surr - n_disc_surr_final
-  n01 <- n_disc_final - n_disc_surr_final
-  n00 <- n_total - n_disc_surr - n_disc_final + n_disc_surr_final
   
   theta1 <- (n11 + pseudo) / (n11 + n10 + 2*pseudo)
   theta0 <- (n01 + pseudo) / (n01 + n00 + 2*pseudo)
   
-  return(c(theta1 = theta1, theta0 = theta0))
-}
-predict_nd1_from_surrogate <- function(nd1_surr, n1, theta1, theta0) {
-  round(theta1 * nd1_surr + theta0 * (n1 - nd1_surr))
+  return(c(theta_d = theta1, theta_c = theta0))
 }
 
 
-# when using the surrogate endpoint, re-estimate the sample size by estimating the number of discordant pairs in the final endpoint at interim analysis, and use the conditional power for the final endpoint
+
+# when using the surrogate endpoint, by the law of total probability condition on all the number of discordant pairs in the primary endpoint at interim analysis in terms of transitions from surrogate to primary endpoint, and use the conditional power for the primary endpoint
 # p_star is the effect size (once the fraction of discordant pairs psi is fixed)
-predicted_power_surrogate <- function(p_star,psi,
-                                      nd1_surr,
-                                      n1,
-                                      theta1,
-                                      theta0,
-                                      nsecond,
-                                      alpha) {
+power_surrogate <- function(p_star, psi,
+                            theta_d, theta_c,
+                            nd1,
+                            n1,
+                            m1,
+                            m_d_SP,
+                            n2,
+                            alpha) {
   
-  nd1 <- predict_nd1_from_surrogate(nd1_surr, n1, theta1, theta0)
+  # pmfs
+  p_X <- dbinom(0:n2, size = n2, prob = psi)
+  p_Y <- dbinom(0:m_d_SP, size = m_d_SP, prob = theta_d)
+  p_Z <- dbinom(0:(m1 - n1 - m_d_SP),
+                size = m1 - n1 - m_d_SP, prob = theta_c)
   
-  return(conditional_power(
-    p_star = p_star, psi = psi,
-    nd1 = nd1,
-    nsecond = nsecond,
-    alpha = alpha
-  ))
+  # convolution: Y + Z
+  p_YZ <- convolve(p_Y, rev(p_Z), type = "open")
+  
+  # convolution: X + Y + Z
+  p_XYZ <- convolve(p_X, rev(p_YZ), type = "open")
+  
+  # support of X + Y + Z
+  k_vals <- 0:(length(p_XYZ) - 1)
+  
+  # conditional power evaluated once per total
+  cp_vals <- vapply(
+    k_vals+nd1,
+    function(k)
+      exact_power(
+        p_star = p_star,
+        nd = k,
+        alpha = alpha
+      ),
+    numeric(1)
+  )
+  sum(cp_vals * p_XYZ)
 }
+
+
+
 
 
 min_nsecond_surrogate <- function(
     p_star, psi,
-    nd1_surr,
+    theta_d, theta_c,
+    nd1,
     n1,
-    theta1,
-    theta0,
+    m1,
+    m_d_SP,
     target_power = 0.8,
     alpha = 0.05,
-    nsecond_max = 200) {
-  # feasibility check
-  pp_max <- predicted_power_surrogate(p_star,nd1_surr,n1,theta1 = theta1,theta0 = theta0, psi = psi,nsecond=nsecond_max,alpha = alpha)
-  if(is.na(pp_max) || pp_max < target_power) return(NA)
+    nsecond_max = 200
+) {
   
-  # search minimal n2
-  for(n2 in 0:nsecond_max) {
-    pp <- predicted_power_surrogate(
-      p_star = p_star,
-      nd1_surr = nd1_surr,
+  # feasibility check at upper bound
+  pp_max <- power_surrogate(
+    p_star = p_star, psi=psi,
+    theta_d = theta_d, theta_c = theta_c,
+    nd1 = nd1,
+    n1 = n1,
+    m1 = m1,
+    m_d_SP = m_d_SP,
+    n2 = nsecond_max,
+    alpha = alpha
+  )
+  
+  if (is.na(pp_max) || pp_max < target_power)
+    return(NA)
+  
+  # binary search
+  lo <- 0
+  hi <- nsecond_max
+  
+  while (lo < hi) {
+    mid <- floor((lo + hi) / 2)
+    
+    pp_mid <- power_surrogate(
+      p_star = p_star, psi = psi,
+      theta_d = theta_d, theta_c = theta_c,
+      nd1 = nd1,
       n1 = n1,
-      theta1 = theta1,theta0 = theta0,psi=psi,
-      nsecond=n2,
-      alpha = alpha)
-    if(!is.na(pp) && pp >= target_power) return(n2)
+      m1 = m1,
+      m_d_SP = m_d_SP,
+      n2 = mid,
+      alpha = alpha
+    )
+    
+    if (!is.na(pp_mid) && pp_mid >= target_power) {
+      hi <- mid
+    } else {
+      lo <- mid + 1
+    }
   }
   
-  return(NA)
+  return(lo)
 }
-
 
 
 
